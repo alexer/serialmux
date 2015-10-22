@@ -79,15 +79,21 @@ def iovec_from_struct(addr, struct):
 def phinfo(ph):
 	return (ph, ph.contents, addressof(ph), addressof(ph.contents))
 
+fh = 1
 class Device():
-	'''A very simple example filesystem'''
-	flag = False
-	input_buffer=""
 	def __init__(self, devname):
 		self.devname = devname
 		self.fd = os.open('/dev/ttyS0', os.O_RDWR)
 		self.pt = PollThread(self.fd)
 		self.pt.start()
+		self.active = []
+		self.block = threading.Condition()
+
+	def pray(self, file_info):
+		#self.block.wait_for(lambda: self.active[-1] == file_info.contents.fh)
+		with self.block:
+			while self.active[-1] != file_info.contents.fh:
+				self.block.wait()
 
 	def init_done(self, unk):
 		path = '/dev/' + devname
@@ -96,18 +102,31 @@ class Device():
 		os.chmod(path, 0666)
 
 	def open(self, req, file_info):
-		print("open %s %s" %(req, file_info))
+		global fh
+		print("open %s %s" % (req, file_info))
+		file_info.contents.fh = fh
+		fh += 1
+		self.active.append(file_info.contents.fh)
 		fcntl.fcntl(self.fd, fcntl.F_SETFL, file_info.contents.flags)
 		libcuse.fuse_reply_open(req, file_info)
-		self.flag = False
+
+	def release(self, req, file_info):
+		self.pray(file_info)
+		print("release %s %s" % (req, file_info))
+		libcuse.fuse_reply_err(req, 0)
+		self.active.remove(file_info.contents.fh)
+		with self.block:
+			self.block.notify_all()
 
 	def poll(self, req, file_info, ph):
+		self.pray(file_info)
 		print("poll", file_info, phinfo(ph))
 		event = self.pt.swap_event(self.pt.up)
 		libcuse.fuse_reply_poll(req, event)
 		self.pt.add_ph(ph)
 
 	def write(self, req, buf, length, offset, file_info):
+		self.pray(file_info)
 		print("write %s %s %s" % (buf, length, offset))
 		assert offset == 0
 		os.write(self.fd, buf[:length])
@@ -115,6 +134,7 @@ class Device():
 		self.pt.refresh()
 
 	def read(self, req, size, off, file_info):
+		self.pray(file_info)
 		print("read %s %s" % (size, off))
 		assert off == 0
 		try:
@@ -127,6 +147,7 @@ class Device():
 		self.pt.refresh()
 
 	def ioctl(self, req, cmd, arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz):
+		self.pray(file_info)
 		print("ioctl %s(0x%08X) %r" % (ioctl_dict[cmd], cmd, (arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)))
 		args = (req, cmd, arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)
 		if cmd in (termios.TCGETS, termios.TCSETS):
@@ -134,7 +155,7 @@ class Device():
 		elif cmd in (termios.TIOCMGET, termios.TIOCMSET):
 			self.simple_ioctl(args, c_uint)
 		elif cmd == termios.TCFLSH:
-			fcntl.ioctl(self.fd, cmd, arg_p)
+			fcntl.ioctl(self.fd, cmd, arg_p or 0)
 			libcuse.fuse_reply_ioctl(req, 0, None, 0)
 		else:
 			print("UNKNOWN ioctl %s(0x%08X) %r" % (ioctl_dict[cmd], cmd, (arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)))
