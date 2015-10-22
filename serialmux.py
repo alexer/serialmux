@@ -90,35 +90,32 @@ class Device():
 		self.pt.start()
 
 	def init_done(self, unk):
-		print('init_done')
 		path = '/dev/' + devname
 		# udev or something resets this if done too soon
 		time.sleep(1)
 		os.chmod(path, 0666)
 
 	def open(self, req, file_info):
-		print ("open %s %s" %(req, file_info))
-		for name in dir(file_info.contents):
-			if not name.startswith('_'):
-				print(name, getattr(file_info.contents, name))
+		print("open %s %s" %(req, file_info))
 		fcntl.fcntl(self.fd, fcntl.F_SETFL, file_info.contents.flags)
 		libcuse.fuse_reply_open(req, file_info)
 		self.flag = False
 
 	def poll(self, req, file_info, ph):
-		#print('poll', file_info, phinfo(ph))
+		print("poll", file_info, phinfo(ph))
 		event = self.pt.swap_event(self.pt.up)
 		libcuse.fuse_reply_poll(req, event)
 		self.pt.add_ph(ph)
 
 	def write(self, req, buf, length, offset, file_info):
-		print ("write %s %s %s %s" %(req, buf, length, offset))
-		self.input_buffer+=buf[offset:length]
-		print (self.input_buffer)
+		print("write %s %s %s" % (buf, length, offset))
+		assert offset == 0
+		os.write(self.fd, buf[:length])
 		libcuse.fuse_reply_write(req, length)
 		self.pt.refresh()
 
 	def read(self, req, size, off, file_info):
+		print("read %s %s" % (size, off))
 		assert off == 0
 		try:
 			out = os.read(self.fd, size)
@@ -126,20 +123,21 @@ class Device():
 			print("read error:", e)
 			libcuse.fuse_reply_err(req, e.errno)
 			return
-		#out = self.input_buffer[off:size]
-		print ("read size: %s off: %s reply: %s buffer: %s" % (size, off, len(out), len(self.input_buffer)))
-		libcuse.fuse_reply_buf(req, self.input_buffer[off:size], len(out))
-		self.input_buffer=self.input_buffer[off+size+1:]
+		libcuse.fuse_reply_buf(req, out, len(out))
 		self.pt.refresh()
 
 	def ioctl(self, req, cmd, arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz):
-		print ("ioctl %s(0x%08X) %r" % (ioctl_dict[cmd], cmd, (arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)))
+		print("ioctl %s(0x%08X) %r" % (ioctl_dict[cmd], cmd, (arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)))
 		args = (req, cmd, arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)
 		if cmd in (termios.TCGETS, termios.TCSETS):
 			self.simple_ioctl(args, termios_t)
 		elif cmd in (termios.TIOCMGET, termios.TIOCMSET):
 			self.simple_ioctl(args, c_uint)
+		elif cmd == termios.TCFLSH:
+			fcntl.ioctl(self.fd, cmd, arg_p)
+			libcuse.fuse_reply_ioctl(req, 0, None, 0)
 		else:
+			print("UNKNOWN ioctl %s(0x%08X) %r" % (ioctl_dict[cmd], cmd, (arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)))
 			libcuse.fuse_reply_ioctl(req, 0, None, 0)
 
 	def simple_ioctl(self, args, c_type):
@@ -152,11 +150,6 @@ class Device():
 			fcntl.ioctl(self.fd, cmd, type_ptr.contents)
 			libcuse.fuse_reply_ioctl(req, 0, type_ptr, out_bufsz)
 
-"""
-ioctl TCFLSH(0x0000540B) (2, <cuse.cuse_api.LP_fuse_file_info object at 0x7f78cd346b90>, 2L, None, 0L, 0L)
-read size: 127 off: 0 reply: 0 buffer: 0
-"""
-
 if __name__ == '__main__':
 		if len(sys.argv) < 2:
 				raise SystemExit('Usage: %s <devname>' % sys.argv[0])
@@ -166,6 +159,7 @@ if __name__ == '__main__':
 
 		cuse.init(operations, devname, sys.argv[2:])
 		try:
-				cuse.main(False)
+			cuse.main(False)
 		except Exception, err:
-				print ("CUSE main ended %s" % str(err))
+			print("CUSE main ended %s" % str(err))
+
