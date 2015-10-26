@@ -87,6 +87,7 @@ class Device():
 		self.pt = PollThread(self.fd)
 		self.pt.start()
 		self.active = []
+		self.states = {}
 		self.block = threading.Condition()
 
 	def pray(self, file_info):
@@ -107,12 +108,22 @@ class Device():
 		file_info.contents.fh = fh
 		fh += 1
 		self.active.append(file_info.contents.fh)
+		if len(self.active) > 1:
+			last = self.active[-2]
+			file_flags = fcntl.fcntl(self.fd, fcntl.F_GETFL)
+			tty_flags = fcntl.ioctl(self.fd, termios.TCGETS, b'\x00' * sizeof(termios_t))
+			self.states[last] = (file_flags, tty_flags)
 		fcntl.fcntl(self.fd, fcntl.F_SETFL, file_info.contents.flags)
 		libcuse.fuse_reply_open(req, file_info)
 
 	def release(self, req, file_info):
 		self.pray(file_info)
 		print("release %s %s" % (req, file_info))
+		if len(self.active) > 1:
+			last = self.active[-2]
+			file_flags, tty_flags = self.states.pop(last)
+			fcntl.fcntl(self.fd, fcntl.F_SETFL, file_flags)
+			fcntl.ioctl(self.fd, termios.TCSETS, tty_flags)
 		libcuse.fuse_reply_err(req, 0)
 		self.active.remove(file_info.contents.fh)
 		with self.block:
