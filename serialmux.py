@@ -23,26 +23,23 @@ class PollThread(threading.Thread):
 		self.p.register(self.r, select.POLLIN)
 		self.event = queue.Queue(1)
 		self.event.put(0)
-		self.up = 0
 		self.daemon = True
 
 	def run(self):
 		while True:
 			ph = self.queue.get()
-			mask = 5 & ~self.up
+			mask = 5 & ~self.peek_event()
 			print('polling', mask)
 			self.p.modify(self.fd, mask)
 			evs = self.p.poll()
 			for fd, event in evs:
 				if fd == self.fd:
-					self.up = event
 					print('polled', event)
 					self.swap_event(event)
 					libcuse.fuse_lowlevel_notify_poll(ph)
 					libcuse.fuse_pollhandle_destroy(ph)
 				else:
 					os.read(self.r, 256)
-					self.up = 0
 
 	def add_ph(self, ph):
 		try:
@@ -56,6 +53,11 @@ class PollThread(threading.Thread):
 	def swap_event(self, new):
 		old = self.event.get()
 		self.event.put(new)
+		return old
+
+	def peek_event(self):
+		old = self.event.get()
+		self.event.put(old)
 		return old
 
 	def refresh(self):
@@ -132,7 +134,7 @@ class Device():
 	def poll(self, req, file_info, ph):
 		self.pray(file_info)
 		print("poll", file_info, phinfo(ph))
-		event = self.pt.swap_event(self.pt.up)
+		event = self.pt.peek_event()
 		libcuse.fuse_reply_poll(req, event)
 		self.pt.add_ph(ph)
 
@@ -140,6 +142,7 @@ class Device():
 		self.pray(file_info)
 		print("write %s %s %s" % (buf, length, offset))
 		assert offset == 0
+		self.pt.swap_event(0)
 		os.write(self.fd, buf[:length])
 		libcuse.fuse_reply_write(req, length)
 		self.pt.refresh()
@@ -148,6 +151,7 @@ class Device():
 		self.pray(file_info)
 		print("read %s %s" % (size, off))
 		assert off == 0
+		self.pt.swap_event(0)
 		try:
 			out = os.read(self.fd, size)
 		except OSError, e:
