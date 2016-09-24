@@ -13,6 +13,12 @@ import threading, Queue as queue
 import select
 import inspect
 
+# How does the poll() operation work in CUSE?
+# - TBH, I have no idea.
+# - I'm assuming you're supposed to...
+#   - Return the current readable/writable status in the reply
+#   - Notify if it becomes readable/writable later
+
 def debug(*args, **kwargs):
 	t = time.time()
 	ts = '[%04d-%02d-%02d %02d:%02d:%02d.%06d]:' % (time.localtime(t)[:6] + ((t % 1) * 1e6, ))
@@ -23,51 +29,42 @@ class PollThread(threading.Thread):
 		threading.Thread.__init__(self)
 		self.fd = fd
 		self.r, self.w = os.pipe()
-		self.queue = queue.Queue()
 		self.p = select.poll()
 		self.p.register(self.fd)
-		self.p.register(self.r, select.POLLIN)
-		self.event = queue.Queue(1)
-		self.event.put(0)
+		self.p.register(self.r)
 		self.daemon = True
+		self.lock = threading.Lock()
+		self.ph = queue.Queue(1)
+		self.evs = queue.Queue(1)
 
 	def run(self):
 		while True:
-			ph = self.queue.get()
-			mask = 5 & ~self.peek_event()
-			print('polling', mask)
+			os.read(self.r, 1)
+			ph = self.ph.get()
+
+			# Get current events
+			self.p.modify(self.r, 0)
+			self.p.modify(self.fd, 5)
+			evs = dict(self.p.poll(0)).get(self.fd, 0)
+			self.evs.put(evs)
+
+			# Get further events
+			mask = 5 & ~evs
+			self.p.modify(self.r, select.POLLIN)
 			self.p.modify(self.fd, mask)
 			evs = self.p.poll()
 			for fd, event in evs:
 				if fd == self.fd:
-					print('polled', event)
-					self.swap_event(event)
+					debug('polled', event)
 					libcuse.fuse_lowlevel_notify_poll(ph)
-					libcuse.fuse_pollhandle_destroy(ph)
-				else:
-					os.read(self.r, 256)
+			libcuse.fuse_pollhandle_destroy(ph)
 
-	def add_ph(self, ph):
-		try:
-			while True:
-				tmp = self.queue.get_nowait()
-				libcuse.fuse_pollhandle_destroy(tmp)
-		except queue.Empty:
-			pass
-		self.queue.put(ph)
-
-	def swap_event(self, new):
-		old = self.event.get()
-		self.event.put(new)
-		return old
-
-	def peek_event(self):
-		old = self.event.get()
-		self.event.put(old)
-		return old
-
-	def refresh(self):
-		os.write(self.w, b'\x00')
+	def poll(self, ph):
+		with self.lock:
+			os.write(self.w, b'\x00')
+			self.ph.put(ph)
+			mask = self.evs.get()
+		return mask
 
 class termios_t(Structure):
 	_fields_ = [
@@ -172,23 +169,19 @@ class Device():
 
 	def poll(self, req, file_info, ph):
 		self.pray(file_info)
-		event = self.pt.peek_event()
+		event = self.pt.poll(ph)
 		debug('-> current:', event)
 		libcuse.fuse_reply_poll(req, event)
-		self.pt.add_ph(ph)
 
 	def write(self, req, buf, length, offset, file_info):
 		self.pray(file_info)
 		assert offset == 0
-		self.pt.swap_event(0)
 		os.write(self.fd, buf[:length])
 		libcuse.fuse_reply_write(req, length)
-		self.pt.refresh()
 
 	def read(self, req, size, off, file_info):
 		self.pray(file_info)
 		assert off == 0
-		self.pt.swap_event(0)
 		try:
 			out = os.read(self.fd, size)
 		except OSError, e:
@@ -198,7 +191,6 @@ class Device():
 		else:
 			debug('-> data:', repr(out))
 		libcuse.fuse_reply_buf(req, out, len(out))
-		self.pt.refresh()
 
 	def ioctl(self, req, cmd, arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz):
 		self.pray(file_info)
