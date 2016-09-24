@@ -92,6 +92,13 @@ def phinfo(ph):
 		phcid = phcaddr = '<--null-->'
 	return '<0x%08x@0x%08x:%s@%s>' % (id(ph), addressof(ph), phcid, phcaddr)
 
+_handle = 0
+def get_new_handle():
+	"""Get a new file handle / client id"""
+	global _handle
+	_handle += 1
+	return _handle
+
 def get_caller_info(level=2):
 	frame = inspect.stack()[level][0]
 	code = frame.f_code
@@ -113,7 +120,6 @@ def get_caller_info(level=2):
 	fh = values['file_info'].contents.fh
 	return '%d %s(%s)' % (fh, funcname, ', '.join('%s=%s' % item for item in items))
 
-fh = 1
 class Device():
 	def __init__(self, devname):
 		self.devname = devname
@@ -140,9 +146,7 @@ class Device():
 		os.chmod(path, 0666)
 
 	def open(self, req, file_info):
-		global fh
-		file_info.contents.fh = fh
-		fh += 1
+		file_info.contents.fh = get_new_handle()
 		info = get_caller_info(level=1)
 		debug('exec', info)
 		self.active.append(file_info.contents.fh)
