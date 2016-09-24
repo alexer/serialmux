@@ -11,6 +11,12 @@ import os, fcntl
 import time
 import threading, Queue as queue
 import select
+import inspect
+
+def debug(*args, **kwargs):
+	t = time.time()
+	ts = '[%04d-%02d-%02d %02d:%02d:%02d.%06d]:' % (time.localtime(t)[:6] + ((t % 1) * 1e6, ))
+	print(ts, *args, **kwargs)
 
 class PollThread(threading.Thread):
 	def __init__(self, fd):
@@ -79,7 +85,33 @@ def iovec_from_struct(addr, struct):
 	return libcuse.iovec(cast(addr, c_void_p), sizeof(struct))
 
 def phinfo(ph):
-	return (ph, ph.contents, addressof(ph), addressof(ph.contents))
+	if ph:
+		phcid = '0x%08x' % id(ph.contents)
+		phcaddr = '0x%08x' % addressof(ph.contents)
+	else:
+		phcid = phcaddr = '<--null-->'
+	return '<0x%08x@0x%08x:%s@%s>' % (id(ph), addressof(ph), phcid, phcaddr)
+
+def get_caller_info(level=2):
+	frame = inspect.stack()[level][0]
+	code = frame.f_code
+	funcname = code.co_name
+	names = code.co_varnames[:code.co_argcount]
+	values = frame.f_locals
+	items = []
+	for name in names:
+		if name in 'self req file_info'.split():
+			continue
+		value = values[name]
+		if name == 'cmd':
+			value = '%s(0x%08X)' % (ioctl_dict[value], value)
+		elif name == 'ph':
+			value = phinfo(value)
+		else:
+			value = repr(value)
+		items.append((name, value))
+	fh = values['file_info'].contents.fh
+	return '%d %s(%s)' % (fh, funcname, ', '.join('%s=%s' % item for item in items))
 
 fh = 1
 class Device():
@@ -93,10 +125,13 @@ class Device():
 		self.block = threading.Condition()
 
 	def pray(self, file_info):
+		info = get_caller_info()
+		debug('wait', info)
 		#self.block.wait_for(lambda: self.active[-1] == file_info.contents.fh)
 		with self.block:
 			while self.active[-1] != file_info.contents.fh:
 				self.block.wait()
+		debug('exec', info)
 
 	def init_done(self, unk):
 		path = '/dev/' + devname
@@ -106,9 +141,10 @@ class Device():
 
 	def open(self, req, file_info):
 		global fh
-		print("open %s %s" % (req, file_info))
 		file_info.contents.fh = fh
 		fh += 1
+		info = get_caller_info(level=1)
+		debug('exec', info)
 		self.active.append(file_info.contents.fh)
 		if len(self.active) > 1:
 			last = self.active[-2]
@@ -120,7 +156,6 @@ class Device():
 
 	def release(self, req, file_info):
 		self.pray(file_info)
-		print("release %s %s" % (req, file_info))
 		if len(self.active) > 1:
 			last = self.active[-2]
 			file_flags, tty_flags = self.states.pop(last)
@@ -133,14 +168,13 @@ class Device():
 
 	def poll(self, req, file_info, ph):
 		self.pray(file_info)
-		print("poll", file_info, phinfo(ph))
 		event = self.pt.peek_event()
+		debug('-> current:', event)
 		libcuse.fuse_reply_poll(req, event)
 		self.pt.add_ph(ph)
 
 	def write(self, req, buf, length, offset, file_info):
 		self.pray(file_info)
-		print("write %s %s %s" % (buf, length, offset))
 		assert offset == 0
 		self.pt.swap_event(0)
 		os.write(self.fd, buf[:length])
@@ -149,21 +183,21 @@ class Device():
 
 	def read(self, req, size, off, file_info):
 		self.pray(file_info)
-		print("read %s %s" % (size, off))
 		assert off == 0
 		self.pt.swap_event(0)
 		try:
 			out = os.read(self.fd, size)
 		except OSError, e:
-			print("read error:", e)
+			debug('-> error:', e)
 			libcuse.fuse_reply_err(req, e.errno)
 			return
+		else:
+			debug('-> data:', repr(out))
 		libcuse.fuse_reply_buf(req, out, len(out))
 		self.pt.refresh()
 
 	def ioctl(self, req, cmd, arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz):
 		self.pray(file_info)
-		print("ioctl %s(0x%08X) %r" % (ioctl_dict[cmd], cmd, (arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)))
 		args = (req, cmd, arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)
 		if cmd in (termios.TCGETS, termios.TCSETS):
 			self.simple_ioctl(args, termios_t)
@@ -173,7 +207,7 @@ class Device():
 			fcntl.ioctl(self.fd, cmd, arg_p or 0)
 			libcuse.fuse_reply_ioctl(req, 0, None, 0)
 		else:
-			print("UNKNOWN ioctl %s(0x%08X) %r" % (ioctl_dict[cmd], cmd, (arg_p, file_info, uflags, in_buff_p, in_bufsz, out_bufsz)))
+			debug("-> unknown")
 			libcuse.fuse_reply_ioctl(req, 0, None, 0)
 
 	def simple_ioctl(self, args, c_type):
