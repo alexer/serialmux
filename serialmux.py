@@ -118,9 +118,10 @@ def get_caller_info(level=2):
 	return '%d %s(%s)' % (fh, funcname, ', '.join('%s=%s' % item for item in items))
 
 class Device():
-	def __init__(self, devname):
-		self.devname = devname
-		self.fd = os.open('/dev/ttyS0', os.O_RDWR)
+	def __init__(self, devpath='/dev/ttyS0', muxdevname=None):
+		self.devpath = devpath
+		self.muxdevname = muxdevname or os.path.basename(devpath) + 'mux'
+		self.fd = os.open(devpath, os.O_RDWR)
 		self.pt = PollThread(self.fd)
 		self.pt.start()
 		self.active = []
@@ -137,7 +138,7 @@ class Device():
 		debug('exec', info)
 
 	def init_done(self, unk):
-		path = '/dev/' + devname
+		path = '/dev/' + self.muxdevname
 		# udev or something resets this if done too soon
 		time.sleep(1)
 		os.chmod(path, 0666)
@@ -217,13 +218,13 @@ class Device():
 			libcuse.fuse_reply_ioctl(req, 0, type_ptr, out_bufsz)
 
 if __name__ == '__main__':
-		if len(sys.argv) < 2:
-				raise SystemExit('Usage: %s <devname>' % sys.argv[0])
+		# Usage: serialmux.py [<devpath> [<muxdevname>]]
 
-		devname = sys.argv[1]
-		operations = Device(devname)
+		devpath = sys.argv[1] if len(sys.argv) > 1 else None
+		muxdevname = sys.argv[2] if len(sys.argv) > 2 else None
+		operations = Device(devpath, muxdevname)
 
-		cuse.init(operations, devname, sys.argv[2:])
+		cuse.init(operations, operations.muxdevname, sys.argv[3:])
 		try:
 			cuse.main(False)
 		except Exception, err:
