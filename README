@@ -1,0 +1,59 @@
+Introduction
+
+Serialmux allows muxing one serial port between multiple programs.
+
+Normally, when you point two programs at the same serial port, both will
+more or less randomly get part of the data coming from the serial port.
+With serialmux, when a second program opens the serial port, serialmux
+disconnects the first program from the serial port and allows the second
+program to use it. When the second program closes the serial port, it
+connects the first program back to the serial port like nothing happened.
+
+This is useful, among other things, when you have a serial port that can
+be used both for logging/debugging and for programming a device. This is
+true eg. on many ARM microcontrollers, such as on NXP's LPC series and
+ST's STM32 series.
+
+Without serialmux, you'd have to close minicom, program the device, and
+open minicom again, possibly missing some vital debug output, requiring
+you to manually reset the device. With serialmux, you can leave minicom
+open, program the device, and you won't miss any output from the device.
+
+I couldn't find a tool that would do this for me (but then again, I
+never seem to...), so I created serialmux. And I really have no idea how
+other people have been dealing with the same problem, given the lack of
+this kind of tool; I assume the answer is that everyone else is just
+using the JTAG/SWD interface to program their devices, but that's not
+always feasible, so... yeah. serialmux.
+
+
+Usage
+
+sudo python serialmux.py /dev/ttyS0 ttyS0mux
+(After that, use /dev/ttyS0mux instead of /dev/ttyS0 in other programs)
+
+
+Requirements
+
+cusepy (with all needed poll() -related functions)
+- Get from: https://github.com/alexer/cusepy
+
+ctypeslib (required by cusepy)
+- PyPI page: https://pypi.python.org/pypi/ctypeslib/
+- (Previously) installed with: sudo easy_install ctypeslib==dev
+- Last time I installed it, the above didn't work
+- Install with: sudo pip install svn+http://svn.python.org/projects/ctypes/trunk/ctypeslib/
+
+gccxml, libfuse, libattr1 (required by cusepy)
+- If on Debian-based systems, install with: sudo apt-get install gccxml libfuse-dev libattr1-dev
+
+
+Other
+
+This software lives at https://github.com/alexer/serialmux
+Check there for the latest version.
+(Wait-- I'm supposed to update this?! Screw that, I'm going home!)
+
+Feel free to open an issue or shoot me a mail if you have any issues.
+(Eg. installation instructions for other distributions are especially welcome)
+
