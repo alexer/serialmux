@@ -217,14 +217,38 @@ class Device():
 			fcntl.ioctl(self.fd, cmd, type_ptr.contents)
 			libcuse.fuse_reply_ioctl(req, 0, type_ptr, out_bufsz)
 
-def main():
-	# Usage: serialmux.py [<devpath> [<muxdevname>]]
+def daemonize():
+	pid = os.fork()
+	if pid != 0:
+		os._exit(0)
 
-	devpath = sys.argv[1] if len(sys.argv) > 1 else None
-	muxdevname = sys.argv[2] if len(sys.argv) > 2 else None
+	os.setsid()
+
+	os.chdir('/')
+
+	fd = os.open('/dev/null', os.O_RDWR)
+	os.dup2(fd, 0)
+	os.dup2(fd, 1)
+	os.dup2(fd, 2)
+	if fd > 2:
+		os.close(fd)
+
+def main():
+	from optparse import OptionParser
+
+	parser = OptionParser(usage = 'usage: %prog [options] [<devpath> [<muxdevname>]]')
+	parser.add_option('-f', '--foreground', dest = 'foreground', action = 'store_true', help = 'do not daemonize')
+	parser.set_defaults(foreground=False)
+	opts, args = parser.parse_args()
+
+	if not opts.foreground:
+		daemonize()
+
+	devpath = args[0] if len(args) >= 1 else None
+	muxdevname = args[1] if len(args) >= 2 else None
 	operations = Device(devpath, muxdevname)
 
-	cuse.init(operations, operations.muxdevname, sys.argv[3:])
+	cuse.init(operations, operations.muxdevname, args[3:])
 	try:
 		cuse.main(False)
 	except Exception as err:
