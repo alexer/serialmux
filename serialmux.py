@@ -217,16 +217,19 @@ class Device():
 			fcntl.ioctl(self.fd, cmd, type_ptr.contents)
 			libcuse.fuse_reply_ioctl(req, 0, type_ptr, out_bufsz)
 
+def main():
+	# Usage: serialmux.py [<devpath> [<muxdevname>]]
+
+	devpath = sys.argv[1] if len(sys.argv) > 1 else None
+	muxdevname = sys.argv[2] if len(sys.argv) > 2 else None
+	operations = Device(devpath, muxdevname)
+
+	cuse.init(operations, operations.muxdevname, sys.argv[3:])
+	try:
+		cuse.main(False)
+	except Exception, err:
+		print("CUSE main ended %s" % str(err))
+
 if __name__ == '__main__':
-		# Usage: serialmux.py [<devpath> [<muxdevname>]]
-
-		devpath = sys.argv[1] if len(sys.argv) > 1 else None
-		muxdevname = sys.argv[2] if len(sys.argv) > 2 else None
-		operations = Device(devpath, muxdevname)
-
-		cuse.init(operations, operations.muxdevname, sys.argv[3:])
-		try:
-			cuse.main(False)
-		except Exception, err:
-			print("CUSE main ended %s" % str(err))
+	main()
 
