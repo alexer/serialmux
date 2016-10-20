@@ -141,7 +141,7 @@ class Device():
 		path = '/dev/' + self.muxdevname
 		# udev or something resets this if done too soon
 		time.sleep(1)
-		os.chmod(path, 0666)
+		os.chmod(path, 0o666)
 
 	def open(self, req, file_info):
 		file_info.contents.fh = get_new_handle()
@@ -185,7 +185,7 @@ class Device():
 		assert off == 0
 		try:
 			out = os.read(self.fd, size)
-		except OSError, e:
+		except OSError as e:
 			debug('-> error:', e)
 			libcuse.fuse_reply_err(req, e.errno)
 			return
@@ -227,7 +227,7 @@ def main():
 	cuse.init(operations, operations.muxdevname, sys.argv[3:])
 	try:
 		cuse.main(False)
-	except Exception, err:
+	except Exception as err:
 		print("CUSE main ended %s" % str(err))
 
 if __name__ == '__main__':
